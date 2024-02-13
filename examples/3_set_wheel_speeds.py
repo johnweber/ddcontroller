@@ -22,10 +22,10 @@ import time
 import numpy as np
 from ddcontroller.wheels import Wheel
 
-# Create right wheel object
+# Create Left wheel object
 wheel = Wheel(motor_pins=(11, 12),
               pwm_frequency=220,
-              i2c_bus=1,
+              i2c_bus=9,
               encoder_address=0x40,
               wheel_radius=0.04165,
               motor_pulley_teeth=15,
