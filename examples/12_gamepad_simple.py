@@ -19,8 +19,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import time
-from .utils.gamepad import Gamepad
+import utils
+
 from ddcontroller import DDRobot
+from utils.gamepad import Gamepad
 
 # Create gamepad object
 gamepad = Gamepad()
@@ -37,20 +39,21 @@ try:
         joystickX, joystickY = [((-2/255)*gamepad.axes['LEFT_X'])+1,
                                 ((-2/255)*gamepad.axes['LEFT_Y'])+1
                                 ]
+        # Mutiply joystick y axis by robot max linear velocity to get linear velocity
+        motion_linear = joystickY*robot.max_linear_velocity
 
-        motion = [
-                  # Mutiply joystick y axis by robot max linear velocity to get linear velocity
-                  joystickY*robot.max_linear_velocity,
+        # Mutiply joystick x axis by robot max angular velocity to get angular velocity
+        motion_angular = joystickX*robot.max_angular_velocity
 
-                  # Mutiply joystick x axis by robot max angular velocity to get angular velocity
-                  joystickX*robot.max_angular_velocity
-                 ]
+        motion = [motion_linear, motion_angular]
+        
+        robot.set_motion(motion)
 
         # Get the robot's latest location
         x, y = robot.get_global_position()
 
         # Print the location of the robot
-        print(f"Global Position: {round(x, 3)}, {round(y, 3)}")
+        print(f"Global Position: {round(x, 3)}, {round(y, 3)}, motion: {round(motion_linear, 3)}, {round(motion_angular, 3)}")
 
         # Run loop at 50Hz
         time.sleep(1/50)
