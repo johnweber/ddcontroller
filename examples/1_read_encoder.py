@@ -22,7 +22,8 @@ import time
 from as5048b import AS5048B
 
 # Create encoder object
-encoder = AS5048B(0x40)
+l_encoder = AS5048B(0x40, bus=9)
+r_encoder = AS5048B(0x41, bus=9)
 
 try:
 
@@ -30,13 +31,15 @@ try:
     while True:
 
         # Read the encoder position
-        position = encoder.read_position()
+        l_position = l_encoder.read_position()
+        r_position = r_encoder.read_position()
 
         # Read the encoder angle
-        angle = encoder.read_angle()
+        l_angle = l_encoder.read_angle()
+        r_angle = r_encoder.read_angle()
 
         # Print out the encoder position and angle
-        print(f"Angle: {round(angle, 3)} radians\tPosition: {position}")
+        print(f"Left angle: {round(l_angle, 3)} rad\tpos: {l_position}\t Right angle: {round(r_angle, 3)} rad\tpos: {r_position}")
 
         # Run loop at 50Hz
         time.sleep(1/50)
