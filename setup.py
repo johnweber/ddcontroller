@@ -36,7 +36,7 @@ install_requires = [
 
 setuptools.setup(
     name='ddcontroller',
-    version='0.0.1',
+    version='0.0.2',
     description='Python controller for differential drive robots.',
     packages=setuptools.find_packages(),
     install_requires=install_requires,

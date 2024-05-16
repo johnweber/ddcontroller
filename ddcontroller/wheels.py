@@ -80,6 +80,7 @@ class Wheel:
         motor_control_type='DUAL_PWM',
         motor_min_pwm_duty=0,
         motor_max_pwm_duty=1,
+        motor_rpm=200,
         motor_decay_mode='FAST',
         invert_motor=False,
         invert_encoder=False,
@@ -97,6 +98,7 @@ class Wheel:
             decay_mode=motor_decay_mode,
             control_type=motor_control_type,
             invert=invert_motor,
+            rpm=motor_rpm,
             min_duty=motor_min_pwm_duty,
             max_duty=motor_max_pwm_duty
         )

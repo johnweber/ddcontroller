@@ -23,11 +23,12 @@ import threading
 import numpy as np
 from simple_pid import PID
 from ruamel.yaml import YAML
+from threading import Lock
 
 from . import wheels
+from . import proximity_sensor
 
 yaml = YAML(typ='safe')
-
 
 class DDRobot:
 
@@ -77,6 +78,24 @@ class DDRobot:
         self.max_traveling_linear_velocity = self.config['robot']['max_traveling_linear_velocity']
         self.max_traveling_angular_velocity = self.config['robot']['max_traveling_angular_velocity']
 
+        ps_i2c_bus = self.config['robot']['proximity_sensor']['i2c_bus']
+        ps_i2c_addr = self.config['robot']['proximity_sensor']['address']
+        ps_interval = self.config['robot']['proximity_sensor']['interval']
+        ps_roi = self.config['robot']['proximity_sensor']['roi']
+
+        self.min_distance = self.config['robot']['min_distance_to_obstacle']
+        self.slow_distance = self.config['robot']['slow_down_distance']
+
+        try:
+            self.prox = proximity_sensor.ProximitySensor(bus=ps_i2c_bus,address=ps_i2c_addr,roi=ps_roi,interval=ps_interval)
+        except Exception as e:
+            print("WARNING: Could not init proximity sensor. Error:", e)
+            self.prox = None                        
+            
+        if (self.prox):
+            self.prox.start()
+            self.dist_to_obstacle = self.prox.get_distance()/10.0 # cm
+
         self.left_wheel = wheels.Wheel(
             motor_pins=self.config['robot']['left_wheel']['motor']['pins'],
             pwm_frequency=self.config['robot']['left_wheel']['motor']['pwm_frequency'],
@@ -84,6 +103,7 @@ class DDRobot:
             motor_control_type=self.config['robot']['left_wheel']['motor']['control_type'],
             motor_min_pwm_duty=self.config['robot']['left_wheel']['motor']['min_pwm_duty'],
             motor_max_pwm_duty=self.config['robot']['left_wheel']['motor']['max_pwm_duty'],
+            motor_rpm=self.config['robot']['left_wheel']['motor']['rpm'],
             i2c_bus=self.config['robot']['left_wheel']['encoder']['i2c_bus'],
             encoder_address=self.config['robot']['left_wheel']['encoder']['address'],
             wheel_radius=self.config['robot']['left_wheel']['wheel_radius'],
@@ -104,6 +124,7 @@ class DDRobot:
             motor_control_type=self.config['robot']['right_wheel']['motor']['control_type'],
             motor_min_pwm_duty=self.config['robot']['right_wheel']['motor']['min_pwm_duty'],
             motor_max_pwm_duty=self.config['robot']['right_wheel']['motor']['max_pwm_duty'],
+            motor_rpm=self.config['robot']['right_wheel']['motor']['rpm'],
             i2c_bus=self.config['robot']['right_wheel']['encoder']['i2c_bus'],
             encoder_address=self.config['robot']['right_wheel']['encoder']['address'],
             wheel_radius=self.config['robot']['right_wheel']['wheel_radius'],
@@ -142,6 +163,9 @@ class DDRobot:
             target=self._position_controller
         )  # create position controller thread object
 
+        self.motion_lock = Lock()
+        self.control_level_lock = Lock()
+
         self.odometry_thread.start()                # start odometry thread
         self.heading_controller_thread.start()      # start heading controller thread # Ideally we don't start this until it's needed
         self.position_controller_thread.start()     # start position contoller thread # Ideally we don't start this until it's needed
@@ -168,6 +192,12 @@ class DDRobot:
         time.sleep(sleep_time)
 
         return sleep_time
+
+    def get_distance_to_obstacle(self):
+
+        self.dist_to_obstacle = self.prox.get_distance()/10.0
+
+        return self.dist_to_obstacle
 
     def _odometry_loop(self):
 
@@ -202,6 +232,9 @@ class DDRobot:
                                         np.sin(self.heading + ((right_wheel_travel - left_wheel_travel) / self.wheel_base)),
                                         np.cos(self.heading + ((right_wheel_travel - left_wheel_travel) / self.wheel_base))
                                     )
+            
+            # Get distance to obstacle from proximity sensor
+            self.dist_to_obstacle = self.get_distance_to_obstacle()
 
             self.sleep(start_time)
             self.odometry_frequency = 1000/((time.monotonic_ns()-start_time)/1e6)
@@ -212,7 +245,9 @@ class DDRobot:
 
             start_time = time.monotonic_ns()  # record loop start time
 
-            if self.control_level >= 2:
+            # protect the reading of the control level
+
+            if self.get_control_level() >= 2:
 
                 heading_error = self.get_heading() - self.target_heading
 
@@ -238,7 +273,7 @@ class DDRobot:
 
             start_time = time.monotonic_ns()  # record loop start time
 
-            if self.control_level >= 2:
+            if self.get_control_level() >= 3:
 
                 self.reached_target_position = False
 
@@ -275,11 +310,16 @@ class DDRobot:
         """
         self.set_motion([0, 0])
         self.running = False
+
         self.odometry_thread.join()
         self.heading_controller_thread.join()
         self.position_controller_thread.join()
         self.right_wheel.stop()
         self.left_wheel.stop()
+
+        if self.prox:
+            self.prox.stop()
+
 
     def define_heading(self, heading):
         """Define the heading of the robot.
@@ -295,6 +335,20 @@ class DDRobot:
 
         self.heading = np.arctan2(np.sin(heading), np.cos(heading))
         return self.heading
+    
+    def set_control_level(self, control_level):
+        """ Set the control level with a mutex lock
+
+        """
+        with self.control_level_lock:
+            self.control_level = control_level
+
+    def get_control_level(self):
+        """ Get the control level with a mutex lock
+
+        """
+        with self.control_level_lock:
+            return self.control_level
 
     def set_heading(self, target_heading, max_angular_velocity=None):
         """Set the heading of the robot.
@@ -312,7 +366,8 @@ class DDRobot:
         if max_angular_velocity:
             self.heading_pid.output_limits = (-max_angular_velocity, max_angular_velocity)
 
-        self.control_level = 2
+        self.set_control_level(2)
+
         self.target_heading = np.arctan2(np.sin(target_heading), np.cos(target_heading))
 
     def get_heading(self):
@@ -331,6 +386,7 @@ class DDRobot:
         This method sets the global position of the robot as an attribute of the DDRobot object.
 
         Args:
+        
         position (list): A list containing the x and y position of the robot.
 
         Returns:
@@ -397,6 +453,41 @@ class DDRobot:
         self.set_motion(self.target_motion)
         return self.target_motion
 
+    def _reduce_velocity(self, d, target_motion):
+        """
+        Reduce the velocity of the robot depending on the proximity to objects
+
+        Args:
+            d: Distance to obstacle (cm)
+            cmd: MotionCommand input velocity command
+        
+        Returns:
+            Scaled MotionCommand depending on proximity
+        """
+        # range2 is the closest range to the obstacle (i.e. beyond this the lineary velocity is scale to 0)
+        # range1 is the range at which the velocity begins to be reduced
+        range2 = self.min_distance
+        range1 = self.slow_distance
+
+        v = target_motion[0] # linear
+        w = target_motion[1] # angular
+
+        f = 1.0
+
+        if (d < range2):
+            f = 0.0  # cut off
+        elif (d > range1):
+            f = 1.0
+        elif (d < range1 and d > range2):
+            f = (d-range2)/(range1-range2)
+
+        if (v >= 0.0): # if velocity command is forwards then scale
+            v = v*f
+            #w = w*f
+
+        new_motion = (v,w)
+        return new_motion
+
     def set_motion(self, target_motion):
         """
         Set the target linear and angular velocities for the robot.
@@ -409,15 +500,18 @@ class DDRobot:
             numpy.ndarray: An array containing the target angular velocities (rad/s) for the left and right wheels.
         """
 
-        self.target_motion = target_motion
+        #self.target_motion = target_motion
+        
+        #new_motion = self._reduce_velocity(self.dist_to_obstacle, target_motion)
+        self.target_motion = self._reduce_velocity(self.dist_to_obstacle, target_motion)
 
         A = np.array([
                       [ 1/self.left_wheel.radius, -(self.wheel_base/2)/self.left_wheel.radius],
                       [ 1/self.right_wheel.radius, (self.wheel_base/2)/self.right_wheel.radius]
                     ])
 
-        B = np.array([target_motion[0],
-                      target_motion[1]])
+        B = np.array([self.target_motion[0],
+                      self.target_motion[1]])
 
         C = np.matmul(A, B)
 
@@ -426,8 +520,9 @@ class DDRobot:
         if C[1] > self.right_wheel.max_angular_velocity and self.debug:
             print(f"Right wheel requested angular velocity exceeded maximum({self.right_wheel.max_angular_velocity}): {C[1]}")
 
-        self.left_wheel.set_angular_velocity(C[0])
-        self.right_wheel.set_angular_velocity(C[1])
+        with self.motion_lock:
+            self.left_wheel.set_angular_velocity(C[0])
+            self.right_wheel.set_angular_velocity(C[1])
 
         return C
 
@@ -485,4 +580,5 @@ class DDRobot:
             self.max_angular_velocity = max_angular_velocity
 
         self.reached_target_position = False
-        self.control_level = 2
+
+        self.set_control_level(3)
